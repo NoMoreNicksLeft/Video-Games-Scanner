@@ -70,7 +70,7 @@ game_exts_x = {
   "TG16": ['pce'],
   "WS": ['ws'], 
   "WSC": ['wsc'],
-  "Indeterminate": ['rom','bin','iso','cas']
+  "Indeterminate": ['rom','bin','iso','cdi','cas']
 }
 
 paren_match = '\((.+?)\)'
