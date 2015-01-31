@@ -7,10 +7,10 @@
 #                                                                                                                      #
 ########################################################################################################################
 
-import re, os, os.path, datetime, titlecase, unicodedata, sys, zipfile
+import re, os, os.path, datetime, titlecase, unicodedata, sys, zipfile, struct
 import Media, VideoFiles, Stack, Utils, Filter, logging, time
 
-logging.basicConfig(filename='/Users/john/plex_games.log',level=logging.DEBUG)
+#logging.basicConfig(filename='/Users/john/plex_games.log',level=logging.DEBUG)
 
 game_exts_x = {
   #"3DO":"3DO", 
@@ -45,7 +45,7 @@ game_exts_x = {
   "GBA": ['gba','sgb'],
   "GBC": ['gbc'], 
   #"NGC":"GameCube", 
-  "VB": ['vb'], 
+  "VBOY": ['vb'], 
   #"WII":"Wii", 
   #"WIIU":"Wii U", 
   #"OUYA":"Ouya", 
@@ -70,7 +70,14 @@ game_exts_x = {
   "TG16": ['pce'],
   "WS": ['ws'], 
   "WSC": ['wsc'],
+  "SWF": ['swf'],
   "Indeterminate": ['rom','bin','iso','cdi','cas']
+}
+
+file_sigs = {
+    "CV": { '0xaa55': int('0x0',16), '0x55aa': int('0x0',16) }, ## Either aa55 or 55aa at 0x0.
+    "NES": { '0x4e45531a': int('0x0',16) },
+    "SGEN": { '0x53454741': int('0x100', 16)}
 }
 
 paren_match = '\((.+?)\)'
@@ -85,13 +92,34 @@ def Scan(path, files, mediaList, subdirs, language=None, root=None, **kwargs):
         name, ext = os.path.splitext(os.path.basename(f))
         # We need to strip the dot off the front of the extension (if there is one).
         ext = ext[1:]
-        # Now we'll check if the extension is our dictionary.
-        platform_id = [k for k, v in game_exts_x.iteritems() if ext in v]
+
         # We need to see if there is a publisher/developer embedded in the filename.
         publisher = re.search(paren_match, name)
         if publisher:
             remove_publisher = re.search(paren_del, name)
             name = remove_publisher.group(1)
+
+        # Now we'll check if the extension is our dictionary. Hopefully this will succeed.
+        platform_id = [k for k, v in game_exts_x.iteritems() if ext in v]
+        # Might not have worked, but we can try harder. Let's check for file signatures...
+        if platform_id and platform_id[0] == 'Indeterminate':
+            # Let's only open the file once.
+            fh = open(f, "r+b")
+            # Loop through possible file signatures...
+            for pf, sigdict in file_sigs.iteritems():
+                for sig, addr in sigdict.iteritems():
+                    fh.seek(addr, 0)
+                    # Most fucked up conditional I've ever written. Gotta fix this.
+                    if '0x' + fh.read((len(sig) - 2)/2).encode('hex') == sig:
+                        platform_id[0] = pf
+                        break
+                # http://stackoverflow.com/questions/653509/breaking-out-of-nested-loops
+                else:
+                    continue
+                break
+
+            # Close it up.
+            fh.close()
 
         # This could be a rom zipped up, or it could be a random zip file.
         if ext == 'zip':
@@ -101,6 +129,19 @@ def Scan(path, files, mediaList, subdirs, language=None, root=None, **kwargs):
                 zname, zext = os.path.splitext(z)
                 zext = zext[1:]
                 platform_id = platform_id + [k for k, v in game_exts_x.iteritems() if zext in v]
+            # Can we check file signatures here too?
+            # If there's only one rom file, and it ends in a few specific extensions...
+            if len(zzz.namelist()) == 1 and zzz.namelist()[0][-3:] in ['rom','bin','cas']:
+                filecontents = zzz.read(zzz.namelist()[0])
+                for pf, sigdict in file_sigs.iteritems():
+                    for sig, addr in sigdict.iteritems():
+                        # logging.debug(" Platform is: " + pf + " sig is: " + sig)
+                        if '0x' + filecontents[addr:(addr + ((len(sig) - 2)/2))].encode('hex') == sig:
+                            platform_id[0] = pf
+                            break
+                    else:
+                        continue
+                    break
 
         # Create the game (movie) object.
         game = Media.Movie(name, None)
@@ -108,11 +149,11 @@ def Scan(path, files, mediaList, subdirs, language=None, root=None, **kwargs):
 
         # Do we have a platform?
         if platform_id:
-            game.source = platform_id[0] 
+            game.originally_available_at = platform_id[0] 
             # Does the name have an embedded publisher? Some titles were released by several, we'll need to send
             # that to the agent plugin.
             if publisher:
-                game.source = game.source + ';' + publisher.group(1)
+                game.originally_available_at = game.originally_available_at + ';' + publisher.group(1)
             mediaList.append(game)
           
     # Let's recurse! 
@@ -127,23 +168,23 @@ def Scan(path, files, mediaList, subdirs, language=None, root=None, **kwargs):
         # This should be safe, since we're not following symlinks or anything that might cause a loop.
         Scan(s, nested_files, mediaList, nested_subdirs, root)
 
-    if files:
-        logging.debug("=======================================================\n")
-        logging.debug(time.strftime("%c"))
-        logging.debug("recvieved following parameters :")
-        logging.debug("path parameter      : ")
-        logging.debug(str(path))
-        logging.debug("files parameter     : ")
-        logging.debug(str(files))
-        logging.debug("mediaList parameter : ")
-        logging.debug(str(mediaList))
-        logging.debug("subdirs parameter   : ")
-        logging.debug(str(subdirs))
-        logging.debug("language parameter  : ")
-        logging.debug(str(language))
-        logging.debug("root parameter      : ")
-        logging.debug(str(root))
-        logging.debug("kwargs parameter    : ")
-        logging.debug(str(kwargs))
-        logging.debug("========================================================\n")
-        logging.debug("               START PROCESSING FILES SECTION          \n ")
+    # if 0:
+    #     logging.debug("=======================================================\n")
+    #     logging.debug(time.strftime("%c"))
+    #     logging.debug("recvieved following parameters :")
+    #     logging.debug("path parameter      : ")
+    #     logging.debug(str(path))
+    #     logging.debug("files parameter     : ")
+    #     logging.debug(str(files))
+    #     logging.debug("mediaList parameter : ")
+    #     logging.debug(str(mediaList))
+    #     logging.debug("subdirs parameter   : ")
+    #     logging.debug(str(subdirs))
+    #     logging.debug("language parameter  : ")
+    #     logging.debug(str(language))
+    #     logging.debug("root parameter      : ")
+    #     logging.debug(str(root))
+    #     logging.debug("kwargs parameter    : ")
+    #     logging.debug(str(kwargs))
+    #     logging.debug("========================================================\n")
+    #     logging.debug("               START PROCESSING FILES SECTION          \n ")
